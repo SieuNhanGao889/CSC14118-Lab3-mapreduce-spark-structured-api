@@ -1,0 +1,228 @@
+name: lab3-bigdata
+
+x-hadoop-environment: &hadoop-environment
+  CORE-SITE.XML_fs.defaultFS: hdfs://namenode:9000
+  HDFS-SITE.XML_dfs.namenode.rpc-address: namenode:9000
+  HDFS-SITE.XML_dfs.namenode.name.dir: file:///data/name
+  HDFS-SITE.XML_dfs.datanode.data.dir: file:///data/data
+  HDFS-SITE.XML_dfs.replication: "2"
+  HDFS-SITE.XML_dfs.permissions.enabled: "false"
+  MAPRED-SITE.XML_mapreduce.framework.name: yarn
+  MAPRED-SITE.XML_mapreduce.application.classpath: >-
+    /opt/hadoop/share/hadoop/mapreduce/*:/opt/hadoop/share/hadoop/mapreduce/lib/*
+  MAPRED-SITE.XML_yarn.app.mapreduce.am.env: HADOOP_MAPRED_HOME=/opt/hadoop
+  MAPRED-SITE.XML_mapreduce.map.env: HADOOP_MAPRED_HOME=/opt/hadoop
+  MAPRED-SITE.XML_mapreduce.reduce.env: HADOOP_MAPRED_HOME=/opt/hadoop
+  YARN-SITE.XML_yarn.resourcemanager.hostname: resourcemanager
+  YARN-SITE.XML_yarn.resourcemanager.address: resourcemanager:8032
+  YARN-SITE.XML_yarn.resourcemanager.scheduler.address: resourcemanager:8030
+  YARN-SITE.XML_yarn.resourcemanager.resource-tracker.address: resourcemanager:8031
+  YARN-SITE.XML_yarn.nodemanager.aux-services: mapreduce_shuffle
+  YARN-SITE.XML_yarn.nodemanager.resource.memory-mb: "2048"
+  YARN-SITE.XML_yarn.scheduler.maximum-allocation-mb: "2048"
+  YARN-SITE.XML_yarn.nodemanager.vmem-check-enabled: "false"
+
+x-hadoop-common: &hadoop-common
+  image: apache/hadoop:3.5.0
+  environment: *hadoop-environment
+  networks:
+    - lab3-network
+  restart: unless-stopped
+
+services:
+  hadoop-storage-init:
+    image: apache/hadoop:3.5.0
+    container_name: lab3-hadoop-storage-init
+    user: "0:0"
+    entrypoint: ["/bin/bash", "-lc"]
+    command:
+      - >-
+        chown -R hadoop:users /data/name /data/datanode1 /data/datanode2 &&
+        chmod 755 /data/name /data/datanode1 /data/datanode2
+    volumes:
+      - namenode-data:/data/name
+      - datanode1-data:/data/datanode1
+      - datanode2-data:/data/datanode2
+    networks:
+      - lab3-network
+    restart: "no"
+
+  namenode:
+    <<: *hadoop-common
+    container_name: lab3-namenode
+    hostname: namenode
+    command:
+      - bash
+      - -lc
+      - >-
+        if [ ! -f /data/name/current/VERSION ]; then
+          hdfs namenode -format -force -nonInteractive;
+        fi;
+        exec hdfs namenode
+    depends_on:
+      hadoop-storage-init:
+        condition: service_completed_successfully
+    ports:
+      - "9871:9870"
+      - "9000:9000"
+    volumes:
+      - namenode-data:/data/name
+      - ./data:/workspace/data
+      - "./data/raw/Amazon Sale Report.csv:/workspace/input/amazon_sales.csv:ro"
+      - ./output:/workspace/output
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9870/ >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 20s
+
+  datanode1:
+    <<: *hadoop-common
+    container_name: lab3-datanode1
+    hostname: datanode1
+    command: ["hdfs", "datanode"]
+    depends_on:
+      namenode:
+        condition: service_healthy
+    volumes:
+      - datanode1-data:/data/data
+      - ./data:/workspace/data
+      - ./output:/workspace/output
+
+  datanode2:
+    <<: *hadoop-common
+    container_name: lab3-datanode2
+    hostname: datanode2
+    command: ["hdfs", "datanode"]
+    depends_on:
+      namenode:
+        condition: service_healthy
+    volumes:
+      - datanode2-data:/data/data
+      - ./data:/workspace/data
+      - ./output:/workspace/output
+
+  resourcemanager:
+    <<: *hadoop-common
+    container_name: lab3-resourcemanager
+    hostname: resourcemanager
+    command: ["yarn", "resourcemanager"]
+    depends_on:
+      namenode:
+        condition: service_healthy
+    ports:
+      - "8089:8088"
+      - "8032:8032"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://resourcemanager:8088/ws/v1/cluster/info >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 20s
+
+  nodemanager1:
+    <<: *hadoop-common
+    container_name: lab3-nodemanager1
+    hostname: nodemanager1
+    command: ["yarn", "nodemanager"]
+    depends_on:
+      resourcemanager:
+        condition: service_healthy
+    volumes:
+      - ./data:/workspace/data
+      - ./output:/workspace/output
+
+  nodemanager2:
+    <<: *hadoop-common
+    container_name: lab3-nodemanager2
+    hostname: nodemanager2
+    command: ["yarn", "nodemanager"]
+    depends_on:
+      resourcemanager:
+        condition: service_healthy
+    volumes:
+      - ./data:/workspace/data
+      - ./output:/workspace/output
+
+  spark-master:
+    image: apache/spark:4.2.0-scala2.13-java17-python3-ubuntu
+    container_name: lab3-spark-master
+    hostname: spark-master
+    command:
+      - /opt/spark/bin/spark-class
+      - org.apache.spark.deploy.master.Master
+    environment:
+      SPARK_NO_DAEMONIZE: "true"
+    ports:
+      - "7077:7077"
+      - "8080:8080"
+      - "4040:4040"
+    volumes:
+      - ./data:/workspace/data
+      - "./data/raw/Amazon Sale Report.csv:/workspace/input/amazon_sales.csv:ro"
+      - ./src:/workspace/src
+      - ./output:/workspace/output
+    networks:
+      - lab3-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/ >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 20s
+
+  spark-worker:
+    image: apache/spark:4.2.0-scala2.13-java17-python3-ubuntu
+    container_name: lab3-spark-worker
+    hostname: spark-worker
+    command:
+      - /opt/spark/bin/spark-class
+      - org.apache.spark.deploy.worker.Worker
+      - spark://spark-master:7077
+    environment:
+      SPARK_NO_DAEMONIZE: "true"
+      SPARK_WORKER_CORES: "2"
+      SPARK_WORKER_MEMORY: 2g
+    depends_on:
+      spark-master:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./data:/workspace/data
+      - "./data/raw/Amazon Sale Report.csv:/workspace/input/amazon_sales.csv:ro"
+      - ./src:/workspace/src
+      - ./output:/workspace/output
+    networks:
+      - lab3-network
+    restart: unless-stopped
+
+  build:
+    image: maven:3.9.11-eclipse-temurin-17
+    container_name: lab3-build
+    working_dir: /workspace
+    command: ["mvn", "--version"]
+    volumes:
+      - ./:/workspace
+      - maven-cache:/root/.m2
+    networks:
+      - lab3-network
+    profiles:
+      - tools
+
+networks:
+  lab3-network:
+    name: lab3-network
+    driver: bridge
+
+volumes:
+  namenode-data:
+    name: lab3-namenode-data
+  datanode1-data:
+    name: lab3-datanode1-data
+  datanode2-data:
+    name: lab3-datanode2-data
+  maven-cache:
+    name: lab3-maven-cache
