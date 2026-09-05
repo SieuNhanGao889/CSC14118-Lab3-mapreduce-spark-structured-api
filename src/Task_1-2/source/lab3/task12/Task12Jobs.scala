@@ -23,14 +23,17 @@ private object Task12Constants {
   val ModeKey = "lab3.task12.eligibility.mode"
   val LocalMode = "local"
   val GlobalMode = "global"
+  val DefaultMode = GlobalMode
   val EligibleStyleCacheAlias = "task12-global-eligible-styles.txt"
   val CsvHeader = "state,month,median_variety,eligible_style_count,eligibility_scope"
 }
 
 /**
- * Job phụ chỉ dùng cho sensitivity mode "global".
+ * Job chuẩn bị chỉ dùng cho mode "global" (mode nộp chính).
  * Mỗi record có size rank >= XXL phát style của nó; reducer loại trùng để tạo
  * tập style từng phục vụ size lớn ở bất kỳ state/tháng nào trong dataset.
+ * output value là NullWritable vì chỉ cần emit key thôi; reducer cũng không cần biết value.
+ * so sánh với StateBoughtCountMapper ở Task 1-1: cần đếm tổng số => khác với global job chỉ cần yes/no style.
  */
 final class GlobalEligibleStyleMapper
     extends Mapper[org.apache.hadoop.io.LongWritable, Text, Text, NullWritable] {
@@ -47,6 +50,7 @@ final class GlobalEligibleStyleMapper
     AmazonCsv.parse(line) match {
       case Left(_) =>
         context.getCounter(Task12Constants.CounterGroup, "ELIGIBILITY_MALFORMED_CSV").increment(1L)
+      // style và sizerank của record tồn tại và guard rule thỏa -> set style vào output key, value là NullWritable.
       case Right(record) =>
         (record.style, record.sizeRank) match {
           case (Some(style), Some(rank)) if rank >= LabRules.MinLargeSizeRank =>
@@ -59,7 +63,7 @@ final class GlobalEligibleStyleMapper
   }
 }
 
-/** Combiner loại style trùng ngay tại mapper, chưa ghi counter kết quả cuối. */
+/** Combiner loại style trùng ngay tại mapper, chưa ghi counter kết quả cuối.*/
 final class DistinctStyleCombiner extends Reducer[Text, NullWritable, Text, NullWritable] {
   override def reduce(
       style: Text,
@@ -91,11 +95,11 @@ final class StyleSkuMapper
     extends Mapper[org.apache.hadoop.io.LongWritable, Text, StyleSkuKey, SkuSizeObservation] {
   private val outputKey = new StyleSkuKey()
   private val outputValue = new SkuSizeObservation()
-  private var mode = Task12Constants.LocalMode
+  private var mode = Task12Constants.DefaultMode
   private var globallyEligibleStyles = Set.empty[String]
 
   override def setup(context: Mapper[org.apache.hadoop.io.LongWritable, Text, StyleSkuKey, SkuSizeObservation]#Context): Unit = {
-    mode = context.getConfiguration.get(Task12Constants.ModeKey, Task12Constants.LocalMode)
+    mode = context.getConfiguration.get(Task12Constants.ModeKey, Task12Constants.DefaultMode)
 
     // Local mode không cần cache. Global mode đọc tập style nhỏ do job phụ tạo.
     if (mode == Task12Constants.GlobalMode) {
@@ -168,10 +172,10 @@ final class StyleVarietyReducer
     extends Reducer[StyleSkuKey, SkuSizeObservation, StateMonthKey, VarietyObservation] {
   private val outputKey = new StateMonthKey()
   private val outputValue = new VarietyObservation()
-  private var mode = Task12Constants.LocalMode
+  private var mode = Task12Constants.DefaultMode
 
   override def setup(context: Reducer[StyleSkuKey, SkuSizeObservation, StateMonthKey, VarietyObservation]#Context): Unit =
-    mode = context.getConfiguration.get(Task12Constants.ModeKey, Task12Constants.LocalMode)
+    mode = context.getConfiguration.get(Task12Constants.ModeKey, Task12Constants.DefaultMode)
 
   override def reduce(
       key: StyleSkuKey,
@@ -221,10 +225,10 @@ final class VarietyIdentityMapper
 final class MedianVarietyReducer
     extends Reducer[StateMonthKey, VarietyObservation, NullWritable, Text] {
   private val output = new Text()
-  private var mode = Task12Constants.LocalMode
+  private var mode = Task12Constants.DefaultMode
 
   override def setup(context: Reducer[StateMonthKey, VarietyObservation, NullWritable, Text]#Context): Unit = {
-    mode = context.getConfiguration.get(Task12Constants.ModeKey, Task12Constants.LocalMode)
+    mode = context.getConfiguration.get(Task12Constants.ModeKey, Task12Constants.DefaultMode)
     // Một reducer duy nhất nên header chỉ xuất hiện đúng một lần.
     output.set(Task12Constants.CsvHeader)
     context.write(NullWritable.get(), output)
@@ -236,17 +240,17 @@ final class MedianVarietyReducer
       context: Reducer[StateMonthKey, VarietyObservation, NullWritable, Text]#Context
   ): Unit = {
     val varieties = ArrayBuffer.empty[Int]
-    var hasLocallyEligibleStyle = false
     val iterator = values.iterator()
     while (iterator.hasNext) {
       val observation = iterator.next()
       varieties += observation.variety
-      hasLocallyEligibleStyle ||= observation.locallyEligible
     }
 
-    // Ở global sensitivity, chỉ giữ state-month có ít nhất một style >= XXL tại
-    // chính nhóm đó để so sánh trên cùng 128 nhóm với kết quả local.
-    if (varieties.nonEmpty && (mode == Task12Constants.LocalMode || hasLocallyEligibleStyle)) {
+    // Local mode đã lọc style theo chính state-month ở Job 1. Global mode phải
+    // xuất mọi state-month có globally eligible style; không giới hạn về 128
+    // nhóm local, nếu không đây chỉ là phép so sánh trên giao hai miền chứ chưa
+    // phải kết quả global đầy đủ.
+    if (varieties.nonEmpty) {
       val sorted = varieties.sorted
       val middle = sorted.length / 2
       val median = if (sorted.length % 2 == 1) sorted(middle).toDouble
@@ -271,13 +275,15 @@ final class MedianVarietyReducer
 final class Task12Job extends Configured with Tool {
   override def run(args: Array[String]): Int = {
     require(args.length == 3 || args.length == 4,
-      "Usage: Task12 <hdfs-input.csv> <hdfs-work-dir> <local-output.csv> [local|global]")
+      "Usage: Task12 <hdfs-input.csv> <hdfs-work-dir> <local-output.csv> [local|global, default=global]")
 
     val startedAt = System.nanoTime()
     val input = new HadoopPath(args(0))
     val workRoot = new HadoopPath(args(1))
     val localOutput = args(2)
-    val mode = args.lift(3).getOrElse(Task12Constants.LocalMode).toLowerCase(Locale.ROOT)
+    // Mặc định dùng global để khớp file đáp án tham chiếu của giảng viên.
+    // Local vẫn được giữ như sensitivity mode và phải truyền tường minh "local".
+    val mode = args.lift(3).getOrElse(Task12Constants.DefaultMode).toLowerCase(Locale.ROOT)
     require(Set(Task12Constants.LocalMode, Task12Constants.GlobalMode).contains(mode),
       s"Eligibility mode must be local or global, found: $mode")
     require(workRoot.depth() >= 2, s"Refusing an overly broad work directory: $workRoot")

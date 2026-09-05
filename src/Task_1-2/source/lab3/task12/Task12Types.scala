@@ -134,9 +134,9 @@ final class StateMonthKey extends WritableComparable[StateMonthKey] {
 }
 
 /**
- * Kết quả của một style trước khi tính median.
- * locallyEligible cho biết style đó có size >= XXL ngay trong state-month này.
- * Cờ này luôn true ở chế độ local; ở chế độ global nó phục vụ sensitivity report.
+ * Kết quả variety của một style trước khi tính median theo state-month.
+ * locallyEligible được giữ như metadata chẩn đoán cho sensitivity analysis;
+ * median global đầy đủ không dùng cờ này để loại state-month.
  */
 final class VarietyObservation extends Writable {
   private var varietyValue = 0

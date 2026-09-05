@@ -116,7 +116,12 @@ XS=1, S=2, M=3, L=4, XL=5, XXL=6, 3XL=7, 4XL=8, 5XL=9, 6XL=10
 
 `Free` is unranked and does not satisfy “at least XXL”. Lexicographic comparison is used only for the final Task 1-1 tie-break exactly as required; it must not be used to evaluate `>= XXL`.
 
-For Task 1-2, the primary submitted implementation uses the natural local interpretation from the wording and reference slide: a style is eligible when it serves a ranked size of at least XXL within that state-month. A global-eligibility mode is also implemented for sensitivity comparison with the instructor-reference interpretation; the report must state both definitions and compare their results.
+For Task 1-2, the submitted `Task_1-2.csv` uses the full global interpretation
+to align with the instructor-reference answer: a style is eligible when it
+serves a ranked size of at least XXL anywhere in the dataset. The natural local
+interpretation remains available as `Task_1-2-local-sensitivity.csv`. The report
+must state both definitions, compare the 128 common state-month keys, and retain
+the 16 additional keys that belong only to the full 144-group global result.
 
 ## 9. Percentiles and standard deviation
 

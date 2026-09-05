@@ -100,7 +100,8 @@ final class LongSumReducer extends Reducer[Text, LongWritable, Text, LongWritabl
  * Ta đảo câu hỏi từ "ngày d cần đọc những record nào?" thành "record ngày t sẽ
  * đóng góp cho những ngày nào?". Record ngày t được phát vào các bucket
  * t+1 .. t+L, tương đương record đó nằm trong [d-L, d-1] của từng ngày d.
- * input là các record đã được lọc và chuẩn hóa từ Job 0
+ * Input vẫn là CSV gốc. Job 0 chỉ cung cấp bảng state -> totalBought qua
+ * Distributed Cache; mapper này tự parse, lọc và chuẩn hóa lại từng record.
  * output là các cặp windowkey và moments - mô tả số lượng record, tổng amount, tổng bình phương amount cho từng size trong mỗi cửa sổ.
  */
 final class WindowBucketMapper extends Mapper[LongWritable, Text, WindowSizeKey, WindowMoments] {

@@ -1,39 +1,41 @@
 # Task 1-2 — state-month median variety
 
-Primary interpretation (`local`): within each `(state, month)`, a style is eligible
-only when that style serves a ranked size of at least XXL in the same group. Variety
-is the number of distinct SKU of that style in the group. The final value is the
-median of eligible style varieties.
+Submitted interpretation (`global`): a style is eligible when it serves a ranked
+size of at least XXL anywhere in the dataset. Variety is still the number of
+distinct SKU of that style inside each `(state, month)`. This mode aligns the
+submitted output with the instructor reference answer and is the driver's default.
 
-The implementation uses two MapReduce jobs:
+Global mode uses three MapReduce jobs:
 
-1. Secondary-sort `(state, month, style, sku)`, count distinct SKU without a HashSet,
-   and retain locally eligible styles.
-2. Group style varieties by `(state, month)`, sort the small list, and calculate the
-   exact median (average the two middle values when the count is even).
+1. Build the distinct set of globally eligible styles and distribute it through
+   Hadoop Distributed Cache.
+2. Secondary-sort `(state, month, style, sku)` and count distinct SKU without a
+   HashSet.
+3. Group varieties by `(state, month)`, sort the small list, and calculate the
+   exact median.
 
-Build and run the submitted local interpretation:
+Build and run the submitted global interpretation:
 
 ```powershell
 docker compose --profile tools run --rm build mvn clean package
 docker cp .\target\lab3-1.0.0-all.jar lab3-namenode:/tmp/lab3-all.jar
 docker exec lab3-namenode hadoop jar /tmp/lab3-all.jar lab3.task12.Task12 `
   /lab3/input/amazon_sales.csv `
-  /lab3/work/task-1-2-local `
+  /lab3/work/task-1-2-global `
   /workspace/output/Task_1-2.csv `
-  local
+  global
 ```
 
-Run the optional global-eligibility sensitivity comparison:
+Run the local-eligibility sensitivity comparison:
 
 ```powershell
 docker exec lab3-namenode hadoop jar /tmp/lab3-all.jar lab3.task12.Task12 `
   /lab3/input/amazon_sales.csv `
-  /lab3/work/task-1-2-global `
-  /workspace/output/Task_1-2-global-sensitivity.csv `
-  global
+  /lab3/work/task-1-2-local `
+  /workspace/output/Task_1-2-local-sensitivity.csv `
+  local
 ```
 
-Global mode adds a preliminary MapReduce job that builds the globally eligible style
-set and distributes it to the variety mappers. It retains only the same state-month
-domain as local mode so the two outputs can be compared row by row.
+The full global result contains 144 state-month groups. Local mode contains 128.
+Sensitivity statistics compare their 128 common keys; the 16 global-only groups
+remain present in the submitted global output.
