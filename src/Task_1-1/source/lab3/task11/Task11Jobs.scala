@@ -107,7 +107,7 @@ final class WindowBucketMapper extends Mapper[LongWritable, Text, WindowSizeKey,
   private val outputKey = new WindowSizeKey()
   private val outputValue = new WindowMoments()
   private var stateCounts = Map.empty[String, Long]
-  // viến var cấp class được nạp dữ liệu 1 lần trong setup() và dùng lại xuyên suốt trong map()
+  // Biến var cấp class được nạp dữ liệu 1 lần trong setup() và dùng lại xuyên suốt trong map()
   override def setup(context: Mapper[LongWritable, Text, WindowSizeKey, WindowMoments]#Context): Unit = {
     // File chỉ có 46 state được Job 0 tạo và Hadoop Distributed Cache chép tới
     // từng mapper. Nhờ vậy mapper chọn L mà không phải gọi HDFS cho mỗi record.
