@@ -1,6 +1,6 @@
 # LAB 3 REPORT — ADVANCED MAPREDUCE AND SPARK STRUCTURED APIs
 
-## Task 1-1, Task 1-2, and Task 2-1
+## Task 1-1, Task 1-2, Task 2-1, and Task 2-2
 
 **Course:** Introduction to Big Data Analysis  
 **Group:** _[Group name]_  
@@ -12,8 +12,8 @@
 ## 1. Executive summary
 
 This report explains the complete reasoning and implementation of Task 1-1 and
-Task 1-2 using Scala and Hadoop MapReduce, and Task 2-1 using Scala and Spark
-DataFrames. The central design principle was to construct each query from its
+Task 1-2 using Scala and Hadoop MapReduce, and Tasks 2-1 and 2-2 using Scala and
+Spark DataFrames. The central design principle was to construct each query from its
 business meaning before choosing framework operations. The work therefore
 followed four levels:
 
@@ -49,6 +49,14 @@ promotions. After rejecting three records with no city, the single Parquet file
 contains 1,434 city rows representing 6,906 denominator records. Spark and
 Pandas both read the exported file successfully.
 
+Task 2-2 implements both Spark `percentile_approx` and a self-contained exact
+type-7 interpolation. Across 16,486 SKU-month groups, P80 and P90 are calculated
+independently, qualifying rows use `promotion_count >= threshold`, and Amount
+dispersion uses population standard deviation. Five measured runs after warm-up
+showed means of 1.330443 seconds for approximate and 1.394585 seconds for exact.
+The combined 65,944-row Parquet output passed Spark validation and a full
+Pandas/NumPy verification of all 32,972 exact results.
+
 ## 2. Requirements coverage
 
 The report is organized to make the assessment evidence explicit rather than
@@ -65,8 +73,11 @@ leaving important decisions implicit in the source code.
 | Task 2-1 query decomposition and zero-result proof | Sections 6.1–6.4 |
 | Task 2-1 `explain(true)`, joins, exchanges, and stages | Sections 6.5–6.6 |
 | Task 2-1 Parquet export and validation | Sections 6.7–6.8 |
-| Trade-offs and reasons for accepting them | Sections 4.9, 4.10, 5.6, 5.8, 6.6, and 7 |
-| Correctness and performance evaluation | Sections 4.11, 5.10–5.12, 6.7–6.8, and 7 |
+| Task 2-2 approximate and exact percentile construction | Sections 7.2–7.3 |
+| Task 2-2 benchmark, accuracy, and differing qualifying sets | Sections 7.5–7.6 |
+| Task 2-2 repartition analysis and Parquet validation | Sections 7.7–7.8 |
+| Trade-offs and reasons for accepting them | Sections 4.9, 4.10, 5.6, 5.8, 6.6, 7.2–7.7, and 8 |
+| Correctness and performance evaluation | Sections 4.11, 5.10–5.12, 6.7–6.8, 7.5–7.8, and 8 |
 
 ## 3. Method: from a question to a MapReduce query
 
@@ -1385,7 +1396,221 @@ including diagnostics, `explain(true)`, export, and read-back validation was
 
 ---
 
-## 7. Overall trade-off and result assessment
+## 7. Task 2-2 — dynamic promotion-count percentiles
+
+### 7.1. Semantic contract
+
+Every source record with a valid SKU and date contributes one observation to
+its `(sku, calendar_month)` group. No status or purchase filter is introduced
+because the query asks about all orders. The dataset contains 128,975 accepted
+observations and 16,486 SKU-month groups.
+
+`promotion_count` is the number of distinct, non-empty, trimmed identifiers in
+the already CSV-decoded `promotion-ids` field. Blank input becomes zero, and no
+identifier is removed because of its text or issuer. The observed canonical
+range is 0 through 26 promotions per record.
+
+For each group and each `p` in `{0.8, 0.9}`, the pipeline:
+
+1. derives a group-specific promotion-count threshold;
+2. attaches that threshold to the group's source rows;
+3. retains rows satisfying `promotion_count >= threshold`;
+4. computes population standard deviation of their non-null Amount values.
+
+Amount nulls remain in the threshold distribution and qualifying-order count,
+but they cannot contribute a monetary value to standard deviation. The output
+therefore records both `qualifying_order_count` and
+`qualifying_amount_count`. If fewer than two qualifying non-null Amount values
+remain, the standard deviation is explicitly set to `0.0`.
+
+### 7.2. Approximate approach
+
+The approximate branch groups records by SKU and month and invokes Spark's
+`percentile_approx` separately for P80 and P90 with accuracy 10,000. The
+returned thresholds are converted to double so both approaches share one
+output schema. This branch delegates bounded-memory quantile estimation to
+Spark and does not collect a group on the driver.
+
+Promotion counts are small integers with many ties. Consequently, a small
+fractional difference between approximate and interpolated thresholds can move
+an entire block of tied records into or out of the qualifying set. Accuracy is
+therefore assessed at three levels: threshold, qualifying membership, and final
+standard deviation.
+
+### 7.3. Self-implemented exact type-7 approach
+
+For each SKU-month, the exact branch constructs a sorted array
+`x[0], ..., x[n-1]` of promotion counts. For percentile `p`:
+
+~~~text
+h = (n - 1) * p
+i = floor(h)
+j = ceil(h)
+weight = h - i
+
+threshold = x[i] + weight * (x[j] - x[i])
+~~~
+
+Spark arrays use one-based indexing, so `element_at` reads positions `i + 1`
+and `j + 1`. For a one-record group, `h = i = j = 0`, which correctly returns
+that record's promotion count without a special case.
+
+The implementation uses only DataFrame operations: `collect_list`,
+`sort_array`, arithmetic columns, `floor`, `ceil`, and `element_at`. It does not
+use a UDF, SQL string, NumPy, or a driver-side percentile calculation. The
+accepted trade-off is O(n) executor memory for the sorted array of one group and
+O(n log n) sorting work. The measured maximum `n` is only 426, so the exact
+array is bounded and small for this dataset.
+
+### 7.4. Threshold attachment and population standard deviation
+
+Both threshold relations have the same long schema:
+
+~~~text
+(sku, month, method, percentile, threshold, total_order_count)
+~~~
+
+Each relation is joined to the source observations on `(sku, month)`. After the
+`promotion_count >= threshold` filter, a final groupBy on the complete result
+key calculates:
+
+~~~text
+qualifying_order_count  = COUNT(*)
+qualifying_amount_count = COUNT(Amount)
+raw standard deviation  = STDDEV_POP(Amount)
+~~~
+
+`stddev_pop`, not Spark's sample `stddev`, implements degrees of freedom zero.
+The explicit count-based `when` expression converts both zero- and one-Amount
+groups to `0.0` and prevents null holes in the result.
+
+### 7.5. Accuracy and qualifying-set comparison
+
+The two results are joined by `(sku, month, percentile)`. Thresholds are
+different when absolute difference exceeds `1e-12`; final standard deviations
+use tolerance `1e-9`. To compare actual qualifying sets, every source record is
+evaluated against both thresholds and the pipeline counts rows for which the
+two Boolean membership decisions differ.
+
+| Percentile | Groups | Different thresholds | Different qualifying sets | Different final SD |
+|---|---:|---:|---:|---:|
+| P80 | 16,486 | 6,053 (36.7160%) | 1,002 (6.0779%) | 403 (2.4445%) |
+| P90 | 16,486 | 7,168 (43.4793%) | 305 (1.8501%) | 125 (0.7582%) |
+
+Many fractional threshold differences do not alter membership because both
+thresholds can fall between the same adjacent integer promotion counts. Even
+when membership changes, null Amounts or coincidentally similar distributions
+can leave final standard deviation unchanged. This explains why threshold
+differences are much more common than final-answer differences.
+
+For `JNE3567-KR-L` in April 2022 at P90, the 120-record group demonstrates the
+full propagation:
+
+| Method | Threshold | Qualifying records | Non-null Amounts | Population SD |
+|---|---:|---:|---:|---:|
+| Approximate | 1.0 | 57 | 56 | 54.378606 |
+| Exact type-7 | 1.4 | 12 | 12 | 112.379905 |
+
+The largest absolute SD difference occurs for `J0281-SKD-XXL`, June 2022, P90.
+Approximate threshold 11.0 retains two records and yields SD 701.5; exact
+threshold 12.2 retains one record and therefore yields the required 0.0.
+
+### 7.6. Benchmark method and results
+
+Both approaches use the same persisted canonical order DataFrame, Spark master,
+single executor, two executor cores, 1 GiB executor memory, and eight shuffle
+partitions. Each branch receives one unmeasured warm-up. The five measured runs
+are then interleaved approximate/exact to reduce bias from cluster drift. Each
+timed action aggregates checksums over threshold, counts, and standard
+deviation, forcing every output column while excluding final Parquet I/O.
+
+| Run | Approximate (s) | Exact type-7 (s) |
+|---:|---:|---:|
+| 1 | 1.780025 | 1.775568 |
+| 2 | 1.367135 | 1.530826 |
+| 3 | 1.181676 | 1.339358 |
+| 4 | 1.290137 | 1.230316 |
+| 5 | 1.033239 | 1.096856 |
+| **Arithmetic mean** | **1.330443** | **1.394585** |
+| **Sample standard deviation** | **0.280872** | **0.265700** |
+
+Exact type-7 is 4.8211% slower by arithmetic mean in this run. The small gap is
+consistent with the group-size profile: exact sorting has additional work, but
+no group is large enough for it to dominate the common scans, joins, and
+aggregations. Individual times decrease after warm-up because JVM code
+generation, executor state, and filesystem caches can continue stabilizing;
+reporting all runs and sample deviation exposes rather than hides that effect.
+
+### 7.7. Repartition analysis
+
+| Measurement | Value |
+|---|---:|
+| SKU-month groups | 16,486 |
+| Groups with more than 1,000 records | 0 |
+| Largest group | `JNE3405-KR-L`, April 2022 |
+| Largest group records | 426 |
+| Input file size | 68,923,428 bytes |
+| Estimated largest-group share | 227,652 bytes (about 222 KiB) |
+| `spark.sql.files.maxPartitionBytes` | 134,217,728 bytes (128 MiB) |
+
+The estimated largest group is roughly 590 times smaller than the default file
+partition size and does not cross the problem's 1,000-record discussion
+threshold. Manual repartitioning for one group would add a shuffle without
+creating useful parallelism inside that group; a single grouping key must still
+be resolved together. No special repartition is therefore applied. Eight
+shuffle partitions are used instead of the default 200 because the complete
+input is only about 69 MB and the observed groups are small.
+
+### 7.8. Output, execution, and validation
+
+The single Parquet file uses this schema:
+
+| Column | Spark type | Meaning |
+|---|---|---|
+| `sku` | string | SKU key |
+| `month` | string | `yyyy-MM` month key |
+| `method` | string | `approx` or `exact_type7` |
+| `percentile` | double | 0.8 or 0.9 |
+| `threshold` | double | dynamic group threshold |
+| `total_order_count` | long | complete SKU-month population |
+| `qualifying_order_count` | long | rows meeting the threshold |
+| `qualifying_amount_count` | long | qualifying rows with Amount |
+| `amount_stddev_pop` | double | population SD or explicit 0.0 |
+
+There are 65,944 rows: `16,486 groups × 2 percentiles × 2 methods`. Before
+export, the data is coalesced to one partition and sorted by SKU, month, method,
+and percentile. `SingleFileOutput` preserves the Parquet footer while renaming
+the one part file to `output/Task_2-2.parquet`.
+
+~~~powershell
+docker compose --profile tools run --rm build mvn clean package
+docker cp .\target\lab3.jar lab3-spark-master:/tmp/lab3.jar
+docker exec lab3-spark-master /opt/spark/bin/spark-submit `
+  --master spark://spark-master:7077 `
+  --conf spark.executor.instances=1 `
+  --conf spark.executor.cores=2 `
+  --conf spark.executor.memory=1g `
+  --conf spark.sql.shuffle.partitions=8 `
+  --class lab3.task22.Task22 `
+  /tmp/lab3.jar `
+  /workspace/input/amazon_sales.csv `
+  /workspace/output/Task_2-2.parquet `
+  5
+~~~
+
+Spark read-back found 65,944 rows, zero duplicate result keys, zero invalid
+count/SD relationships, and no null output values. An independent Pandas/NumPy
+type-7 calculation checked all 32,972 exact group-percentile rows: threshold
+and SD mismatches were both zero. Maximum numerical differences were
+`3.55e-15` for threshold and `2.27e-13` for SD, which are floating-point noise
+well below the validation tolerances. The final file has shape `(65944, 9)` in
+Pandas and is 256,598 bytes. The complete Spark run, including warm-ups, ten
+measured benchmark actions, comparison, export, and validation, took 55.391
+seconds and ended with `TASK22_VALIDATION=PASS`.
+
+---
+
+## 8. Overall trade-off and result assessment
 
 The design favors explicit, testable execution contracts over minimizing the
 number of source files or transformations.
@@ -1403,6 +1628,9 @@ number of source files or transformations.
 | Global Task 1-2 eligibility | Treats large-size service as a dataset-level style property | Adds a preliminary job and includes styles without local XXL evidence | Full 144-row result validates; local 128-row result is retained for sensitivity |
 | Task 2-1 broadcast joins | Avoids shuffling the candidate side and stabilizes the physical plan | Each executor receives three small hashed relations | Relations have 185, 0, and 40 rows in the submitted run |
 | Task 2-1 city null rejection | Produces only real city groups | Three base records are excluded from output | Rejection is logged; output denominator invariant equals 6,906 |
+| Task 2-2 approximate percentile | Uses Spark's bounded-memory built-in aggregation | Threshold can differ from type-7 interpolation | All threshold, membership, and final-SD differences are quantified |
+| Task 2-2 exact type-7 arrays | Reproduces the specified linear interpolation exactly | O(n) group memory and O(n log n) sorting | Largest group has only 426 integer values; all 32,972 exact rows validate |
+| Eight Spark shuffle partitions | Avoids scheduling 200 tiny tasks for a 69 MB input | Configuration is dataset-specific | No group exceeds 426 rows or about 222 KiB |
 
 The Task 1 counters show why the MapReduce plans are reasonable: Task 1-1 reduces 925,395
 bucket records to 27,134 combined records. Submitted global Task 1-2 filters
@@ -1410,18 +1638,48 @@ bucket records to 27,134 combined records. Submitted global Task 1-2 filters
 into 68,161 shuffle records, and sends 31,394 compact style varieties to the
 median stage. For Task 2-1, the physical plan keeps the large candidate branch
 stationary across three broadcast joins and limits shuffle to the four required
-aggregations.
+aggregations. Task 2-2 shows that exact interpolation costs only 4.8211% more
+than approximate percentile at the observed group sizes, while making every
+threshold definition explicit.
 
 The key correctness conclusion is that every filtering, grouping, null, ordering,
 and ambiguity decision is stated as part of the query contract and is then
 represented in a concrete framework mechanism. Reproducible full-output
 validation found zero mismatches for Task 1-1, submitted global Task 1-2, and
 local Task 1-2 sensitivity. Task 2-1 passed Spark read-back invariants and an
-independent Pandas schema/content check.
+independent Pandas schema/content check. Task 2-2 additionally passed a full
+Pandas/NumPy comparison of every exact threshold, qualifying count, and final
+population standard deviation.
 
-## 8. Reproducibility and file layout
+### 8.1. Methodological takeaways
 
-### 8.1. Independent output validator
+Three general lessons follow from the four implementations:
+
+1. A data-processing requirement should be treated as a precise contract.
+   Ambiguous terms must be resolved before implementation, documented with a
+   defensible interpretation, and tested through a sensitivity result when an
+   alternative interpretation could materially change the output. This report
+   applies that discipline to purchased Amount versus Qty, local versus global
+   large-size eligibility, null geographic keys, and exact versus approximate
+   percentile definitions.
+2. In distributed processing, data movement is usually more consequential than
+   an individual arithmetic operation. The MapReduce counters quantify the
+   effect of combiners and compact intermediate records, while the Spark plan
+   comparison shows the additional exchanges and sorts introduced when small
+   relations cannot be broadcast. Optimization decisions are therefore based
+   on measured shuffle volume and group size rather than on local CPU work
+   alone.
+3. An empty qualifying set or an all-zero derived measure is not, by itself,
+   evidence of an implementation error. Task 2-1 produces zero qualifying
+   orders because every Cancelled-and-Standard candidate has an empty promotion
+   array and therefore cannot meet the three-promotion condition. Progressive
+   condition relaxation, denominator invariants, Spark read-back checks, and an
+   independent Pandas validation distinguish this data-driven result from a
+   broken join or filter.
+
+## 9. Reproducibility and file layout
+
+### 9.1. Independent output validator
 
 <code>Task1Validator</code> is a sequential Scala program. It shares only the
 CSV parsing and normalization contract with the jobs; it does not instantiate
@@ -1446,7 +1704,13 @@ Observed validation result:
 The validator also confirmed 128,975 input records, zero malformed CSV records,
 109,566 valid bought records, and 1,103 globally eligible styles.
 
-### 8.2. Reproducing the benchmark
+Task 2-2 has a separate independent Pandas/NumPy check because its central
+correctness risk is numerical interpolation rather than MapReduce mechanics.
+It reconstructs canonical promotion counts from the raw CSV, calculates type-7
+P80/P90 and ddof-zero standard deviation, and compares all 32,972 exact rows.
+The measured mismatch count is zero.
+
+### 9.2. Reproducing the benchmark
 
 The PowerShell runner copies the built JAR once, executes each complete Hadoop
 pipeline five times, rejects failed runs, extracts the elapsed time printed by
@@ -1461,7 +1725,7 @@ The <code>-Pipeline</code> option also accepts <code>task11</code>,
 to be resumed without rerunning completed batches. Exact samples are reported
 in Sections 4.11 and 5.10.
 
-### 8.3. Files on the normal host filesystem
+### 9.3. Files on the normal host filesystem
 
 Required submission files:
 
@@ -1469,7 +1733,8 @@ Required submission files:
 output/
 ├── Task_1-1.csv
 ├── Task_1-2.csv
-└── Task_2-1.parquet
+├── Task_2-1.parquet
+└── Task_2-2.parquet
 ~~~
 
 Supplementary analysis files:
@@ -1491,10 +1756,12 @@ src/
 │   ├── Task11Types.scala
 │   └── Task11Jobs.scala
 ├── Task_1-2/source/lab3/task12/
-    ├── Task12Types.scala
-    └── Task12Jobs.scala
-└── Task_2-1/source/lab3/task21/
-    └── Task21.scala
+│   ├── Task12Types.scala
+│   └── Task12Jobs.scala
+├── Task_2-1/source/lab3/task21/
+│   └── Task21.scala
+└── Task_2-2/source/lab3/task22/
+    └── Task22.scala
 scripts/
 ├── Task1Validator.scala
 └── benchmark-task1.ps1
