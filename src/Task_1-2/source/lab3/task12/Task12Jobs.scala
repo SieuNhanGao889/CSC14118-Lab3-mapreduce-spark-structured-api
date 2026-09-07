@@ -281,7 +281,7 @@ final class Task12Job extends Configured with Tool {
     val input = new HadoopPath(args(0))
     val workRoot = new HadoopPath(args(1))
     val localOutput = args(2)
-    // Mặc định dùng global để khớp file đáp án tham chiếu của giảng viên.
+    // Mặc định dùng global.
     // Local vẫn được giữ như sensitivity mode và phải truyền tường minh "local".
     val mode = args.lift(3).getOrElse(Task12Constants.DefaultMode).toLowerCase(Locale.ROOT)
     require(Set(Task12Constants.LocalMode, Task12Constants.GlobalMode).contains(mode),

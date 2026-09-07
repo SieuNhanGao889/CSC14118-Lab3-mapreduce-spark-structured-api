@@ -1,3 +1,4 @@
 target/
 output/smoke-csv/
 output/smoke-parquet/
+output/.*.crc

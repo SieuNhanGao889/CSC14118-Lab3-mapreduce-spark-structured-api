@@ -1,26 +1,27 @@
-# LAB 3 REPORT — ADVANCED MAPREDUCE
+# LAB 3 REPORT — ADVANCED MAPREDUCE AND SPARK STRUCTURED APIs
 
-## Task 1-1 and Task 1-2
+## Task 1-1, Task 1-2, and Task 2-1
 
 **Course:** Introduction to Big Data Analysis  
 **Group:** _[Group name]_  
 **Members:** _[Student IDs and full names]_  
-**Execution date:** 5 September 2026
+**Execution date:** 7 September 2026
 
 ---
 
 ## 1. Executive summary
 
 This report explains the complete reasoning and implementation of Task 1-1 and
-Task 1-2 using Scala and Hadoop MapReduce. The central design principle was to
-construct each query from its business meaning before writing mapper and reducer
-classes. The work therefore followed four levels:
+Task 1-2 using Scala and Hadoop MapReduce, and Task 2-1 using Scala and Spark
+DataFrames. The central design principle was to construct each query from its
+business meaning before choosing framework operations. The work therefore
+followed four levels:
 
 1. define the semantic contract of every field and filter;
 2. express the required result as a sequence of logical relations and
    aggregations;
-3. translate those logical operations into MapReduce keys, values, partitioning,
-   sorting, grouping, and job boundaries;
+3. translate those logical operations into MapReduce keys/jobs or Spark
+   transformations, joins, aggregations, and exchange boundaries;
 4. encode the physical plan as reusable Scala classes and verify the output.
 
 Task 1-1 uses two jobs. The first job counts bought records by state and decides
@@ -35,11 +36,18 @@ state-month-style and the exact median per state-month. A two-job local mode is
 retained as a sensitivity analysis because the wording also supports applying
 the size condition inside each state-month.
 
-Both submitted outputs were checked in full by a reproducible, sequential Scala
+Both Task 1 outputs were checked in full by a reproducible, sequential Scala
 reference calculation that does not use the MapReduce implementation classes.
 Task 1-1 produced 3,696 data rows and the submitted global Task 1-2 produced 144
 data rows. The 128-row local sensitivity output was also checked. Every
 comparison produced zero mismatches.
+
+Task 2-1 is implemented entirely with the Spark DataFrame API. Its result is
+deliberately zero for every city: all 6,909 Cancelled + Standard source records
+have empty promotion arrays, so none can reach the required three valid
+promotions. After rejecting three records with no city, the single Parquet file
+contains 1,434 city rows representing 6,906 denominator records. Spark and
+Pandas both read the exported file successfully.
 
 ## 2. Requirements coverage
 
@@ -54,8 +62,11 @@ leaving important decisions implicit in the source code.
 | Task 1-1 tie-breaking rule and justification | Section 4.8 |
 | Task 1-2 query understanding and decomposition | Sections 5.1–5.4 |
 | Task 1-2 distinct-SKU and median implementation | Sections 5.5–5.8 |
-| Trade-offs and reasons for accepting them | Sections 4.9, 4.10, 5.6, 5.8, and 6 |
-| Correctness and performance evaluation | Sections 4.11, 5.10–5.12, and 6 |
+| Task 2-1 query decomposition and zero-result proof | Sections 6.1–6.4 |
+| Task 2-1 `explain(true)`, joins, exchanges, and stages | Sections 6.5–6.6 |
+| Task 2-1 Parquet export and validation | Sections 6.7–6.8 |
+| Trade-offs and reasons for accepting them | Sections 4.9, 4.10, 5.6, 5.8, 6.6, and 7 |
+| Correctness and performance evaluation | Sections 4.11, 5.10–5.12, 6.7–6.8, and 7 |
 
 ## 3. Method: from a question to a MapReduce query
 
@@ -702,11 +713,11 @@ region” makes local eligibility a natural interpretation. It produces 128
 state-month groups and, for MAHARASHTRA in April 2022, a median of 4.0 from 647
 styles.
 
-However, the instructor reference result applies eligibility globally.
-Therefore the submitted <code>Task_1-2.csv</code> uses full global eligibility
-to minimize grading-reference risk. It answers: among styles that served XXL or
-larger anywhere, what is their variety and median in each state-month where
-they appear? This full global result has 144 groups. The local result remains in
+The submitted <code>Task_1-2.csv</code> uses full global eligibility because the
+phrase “style which has served a size of at least XXL” can be evaluated as a
+property of the style before state-month aggregation. It answers: among styles
+that served XXL or larger anywhere, what is their variety and median in each
+state-month where they appear? This full global result has 144 groups. The local result remains in
 <code>Task_1-2-local-sensitivity.csv</code>, and both interpretations are
 defined and compared rather than silently selecting one.
 
@@ -1050,13 +1061,14 @@ the current state-month. It therefore approximately doubles the style-variety
 intermediate rows, adds 16 output groups, and changes a material fraction of
 answers.
 
-Global eligibility is selected for the submitted file because the instructor
-reference answer uses this interpretation. The local reading remains
+Global eligibility is selected because it treats “has served a size of at least
+XXL” as a dataset-level property of a style and therefore resolves that
+predicate before state-month aggregation. The local reading remains
 linguistically reasonable because the question first defines variety within a
 specific region and interval. Keeping and validating both modes makes this
 choice explicit and allows the result to be changed without rewriting the
-aggregation. Semantic alignment with the grading reference, not the slower or
-faster runtime, determines the submitted mode.
+aggregation. Query semantics, not the slower or faster runtime, determines the
+submitted mode.
 
 ### 5.12. Correctness checks, output, and execution
 
@@ -1106,10 +1118,277 @@ docker exec lab3-namenode hadoop jar /tmp/lab3-all.jar lab3.task12.Task12 /lab3/
 
 ---
 
-## 6. Overall trade-off and result assessment
+## 6. Task 2-1 — city percentage with temporal promotions
 
-The design favors explicit, testable MapReduce contracts over minimizing the
-number of source files or classes.
+### 6.1. Semantic interpretation and processing unit
+
+For each normalized, non-null city, the denominator is the number of source
+records satisfying both:
+
+~~~text
+UPPER(TRIM(Status)) contains "CANCELLED"
+UPPER(TRIM(ship-service-level)) = "STANDARD"
+~~~
+
+The numerator is the subset of those records that additionally satisfies:
+
+~~~text
+number of temporally-valid promotions >= 3
+Amount < average Amount for that record's state among rows where
+  UPPER(TRIM(Fulfilment)) = "MERCHANT" and
+  UPPER(TRIM(Courier Status)) = "SHIPPED"
+~~~
+
+The final value is `100.0 * numerator / denominator`. “Shipped” in this Task
+2-1 threshold applies to `Courier Status` by exact normalized equality; it is
+not the Task 1 bought predicate on `Status`. Likewise, `Fulfilment`, not
+`fulfilled-by`, supplies the merchant condition.
+
+One CSV row is the processing unit, consistently with the shared data contract.
+Applying the two base predicates to that unit produces 6,909 Cancelled +
+Standard records. Repeated `Order ID` values are not collapsed. `source_index`,
+which is unique in the observed input, attaches a promotion count back to the
+same source record.
+
+Three Cancelled + Standard records have no city. They are diagnosed and
+excluded rather than manufacturing a null “city”. Missing Amount, state,
+promotion array, or state threshold does not remove a record from a valid
+city's denominator; it only prevents that record from entering the numerator.
+This policy follows the query's city-level domain: a null key cannot identify a
+city. Retaining those records would create an additional null bucket rather
+than a real city and would not change any percentage for the 1,434 valid cities.
+
+### 6.2. Temporal promotion relation
+
+After CSV decoding, `promotion-ids` is split on commas, tokens are trimmed,
+empty tokens are removed, and identifiers are de-duplicated within each record.
+No prefix is excluded, so Amazon-issued identifiers participate exactly like
+all others.
+
+The first derived relation is:
+
+~~~text
+PromotionPeriod(promotion_id) =
+  min(order_date), max(order_date), datediff(max, min)
+
+ValidPromotion = PromotionPeriod where active_days >= 2
+~~~
+
+The strict interpretation matters: two sightings on the same calendar day have
+an active period of zero, while first and last sightings two days apart have an
+active period of two. The complete dataset contains 284 distinct promotion
+identifiers, of which 185 are temporally valid.
+
+Candidate promotion arrays are exploded and inner-joined to this valid set.
+The matches are grouped by `source_index` to obtain one
+`valid_promotion_count` per candidate record. The canonical arrays are already
+de-duplicated, so a simple count is sufficient.
+
+### 6.3. State threshold relation
+
+The second independent branch filters the complete source, not the Cancelled +
+Standard candidates:
+
+~~~text
+StateAverage(state) = AVG(Amount)
+  WHERE is_valid_state
+    AND fulfilment = "MERCHANT"
+    AND courier_status = "SHIPPED"
+    AND Amount IS NOT NULL
+  GROUP BY state
+~~~
+
+Spark's `avg` ignores nulls, but the explicit `Amount IS NOT NULL` predicate
+makes the intended population visible. This produces 40 state thresholds. The
+comparison is strict (`Amount < average`), as stated by the problem.
+
+### 6.4. Joins, aggregation, and proof of the zero result
+
+The valid-promotion count and state-average relations are both LEFT-joined to
+the 6,906 candidates having a city. A missing promotion count becomes zero;
+a missing state average remains null. An inner join here would silently remove
+records and shrink the denominator.
+
+The data itself proves that the all-zero result is not an empty-pipeline bug:
+
+| Checkpoint | Rows/value |
+|---|---:|
+| Cancelled + Standard source records | 6,909 |
+| Records rejected for missing city/index | 3 |
+| Records represented by city denominators | 6,906 |
+| Candidate records with a non-empty promotion array | 0 |
+| Candidate records with at least three valid promotions | 0 |
+| Final qualifying numerator | 0 |
+
+Because the promotion predicate is already false for every candidate, the
+Amount predicate cannot make any candidate qualify. The implementation still
+computes and joins both relations: no constant zero is embedded in the code.
+
+### 6.5. Logical and physical decomposition
+
+The analytical query has four aggregation boundaries:
+
+1. group promotion appearances by identifier to find first/last dates;
+2. group candidate promotion matches by source record;
+3. group Merchant + courier-Shipped records by state for the average;
+4. group enriched candidate records by city for denominator and numerator.
+
+It has three joins:
+
+1. candidate promotion identifiers to the valid-promotion set (inner);
+2. candidates to their valid-promotion counts (left);
+3. candidates to their associated state average (left).
+
+The driver calls `frames.result.explain(extended = true)` before any export.
+The relevant physical-plan structure printed by Spark 4.2 is:
+
+~~~text
+AdaptiveSparkPlan
++- HashAggregate(keys=[ship_city], ...)
+   +- Exchange hashpartitioning(ship_city, ...)
+      +- HashAggregate(keys=[ship_city], ...)
+         +- BroadcastHashJoin [ship_state], [ship_state], LeftOuter
+            :- BroadcastHashJoin [source_index], [source_index], LeftOuter
+            :  +- ... Cancelled + Standard candidates ...
+            :  +- BroadcastExchange
+            :     +- HashAggregate(keys=[source_index], ...)
+            :        +- Exchange hashpartitioning(source_index, ...)
+            :           +- BroadcastHashJoin [promotion_id], [promotion_id], Inner
+            :              +- ... exploded candidate promotions ...
+            :              +- BroadcastExchange
+            :                 +- HashAggregate(keys=[promotion_id], ...)
+            :                    +- Exchange hashpartitioning(promotion_id, ...)
+            +- BroadcastExchange
+               +- HashAggregate(keys=[ship_state], ...)
+                  +- Exchange hashpartitioning(ship_state, ...)
+~~~
+
+![Figure 6.1 — Task 2-1 physical plan using broadcast joins](2-1-broadcast-joins.png)
+
+The complete parsed, analyzed, optimized, and physical plans are emitted between
+the stable `TASK21_EXTENDED_ANALYTICAL_PLAN_BEGIN` and `_END` log markers so the
+submission run can be copied directly into the final PDF report.
+
+### 6.6. Join strategy, exchanges, and stages
+
+Explicit `broadcast(...)` hints are applied only to derived small relations.
+This makes the intended strategy deterministic even when source files lack
+catalog statistics. Spark selects three `BroadcastHashJoin` nodes and no
+`SortMergeJoin` node:
+
+| Joined relation | Observed size | Join type | Physical strategy |
+|---|---:|---|---|
+| Valid promotions | 185 rows | inner | BroadcastHashJoin |
+| Candidate promotion counts | 0 rows for this input | left | BroadcastHashJoin |
+| State averages | 40 rows | left | BroadcastHashJoin |
+
+Broadcasting avoids repartitioning and sorting the candidate side. The plan has
+four shuffle exchanges (`Exchange hashpartitioning`)—one for each `groupBy`—and
+three `BroadcastExchange` nodes. Broadcast exchanges distribute small hashed
+relations but are reported separately from shuffle exchanges so the network
+cost is not mischaracterized.
+
+A controlled physical-plan experiment was also executed to isolate the cost of
+the join strategy. For the second plan, all explicit broadcast hints were removed and
+`spark.sql.autoBroadcastJoinThreshold` was set to `-1`. The same logical query
+then required shuffle/sort joins:
+
+| Physical-plan metric | Broadcast plan | Broadcast disabled | Difference |
+|---|---:|---:|---:|
+| BroadcastHashJoin | 3 | 0 | -3 |
+| SortMergeJoin | 0 | 3 | +3 |
+| Shuffle `Exchange hashpartitioning` | 4 | 7 | +3 |
+| BroadcastExchange | 3 | 0 | -3 |
+| Sort nodes | 0 | 6 | +6 |
+
+Each SortMergeJoin repartitions and sorts both inputs, explaining the three
+additional shuffle exchanges and six Sort nodes. The broadcast plan instead
+sends each small derived relation to the executors while leaving the candidate
+side in place. Full `explain(true)` output for both plans is delimited by the
+`TASK21_COMPARISON_*_EXTENDED_PLAN_BEGIN/END` markers.
+
+![Figure 6.2 — Task 2-1 physical plan with broadcast disabled](2-1-broadcast-disabled.png)
+
+Changing the physical strategy did not change query semantics. Bidirectional
+`EXCEPT ALL` returned zero rows both ways, and the comparison driver ended with
+`TASK21_COMPARISON_VALIDATION=PASS`.
+
+![Figure 6.3 — Physical-plan metrics and result-equivalence validation](2-1-metrics-validation.png)
+
+With AQE enabled, one worker, two executor cores, and eight configured shuffle
+partitions, `SparkStatusTracker` observed ten distinct stages (IDs 22–31) in the
+actual final Parquet write. Stage count is greater than shuffle count because
+broadcast construction and the final write/coalesce also create stage
+boundaries. The driver records both stage count and IDs instead of inferring
+runtime stages solely from the static plan.
+
+### 6.7. Output contract and deterministic export
+
+Final schema:
+
+| Column | Spark type | Meaning |
+|---|---|---|
+| `ship_city` | string, non-null | normalized city |
+| `cancelled_standard_order_count` | long | denominator |
+| `qualifying_order_count` | long | numerator |
+| `qualifying_percentage` | double | percentage in [0, 100] |
+
+The result is coalesced to one partition, sorted within that partition by city,
+and passed to `SingleFileOutput`. That utility writes a temporary Spark
+directory, locates the single `part-*.parquet` file, and renames the intact file
+to `output/Task_2-1.parquet`. It never concatenates Parquet byte streams.
+
+The output contains 1,434 city rows, and its count columns sum to 6,906 and zero
+respectively. The observed percentage range is exactly `[0.0, 0.0]`.
+
+### 6.8. Execution and validation
+
+~~~powershell
+docker compose --profile tools run --rm build mvn clean package
+docker cp .\target\lab3.jar lab3-spark-master:/tmp/lab3.jar
+docker exec lab3-spark-master /opt/spark/bin/spark-submit `
+  --master spark://spark-master:7077 `
+  --conf spark.executor.instances=1 `
+  --conf spark.executor.cores=2 `
+  --conf spark.executor.memory=1g `
+  --conf spark.sql.shuffle.partitions=8 `
+  --class lab3.task21.Task21 `
+  /tmp/lab3.jar `
+  /workspace/input/amazon_sales.csv `
+  /workspace/output/Task_2-1.parquet
+~~~
+
+Plan comparison command:
+
+~~~powershell
+docker exec lab3-spark-master /opt/spark/bin/spark-submit `
+  --master spark://spark-master:7077 `
+  --conf spark.executor.instances=1 `
+  --conf spark.executor.cores=2 `
+  --conf spark.executor.memory=1g `
+  --conf spark.sql.shuffle.partitions=8 `
+  --class lab3.task21.Task21PlanComparison `
+  /tmp/lab3.jar `
+  /workspace/input/amazon_sales.csv
+~~~
+
+The driver reads the physical file back with Spark and checks that it is
+non-empty, that summed denominators reproduce the accepted candidate count,
+that `0 <= numerator <= denominator`, and that every percentage is within
+`[0, 100]`. It prints `TASK21_VALIDATION=PASS` only after these checks.
+
+An independent Pandas read produced shape `(1434, 4)`, the expected `int64`
+count columns and `float64` percentage, no nulls, denominator sum 6,906,
+numerator sum zero, and ascending city order. The measured end-to-end Spark run
+including diagnostics, `explain(true)`, export, and read-back validation was
+24.016 seconds.
+
+---
+
+## 7. Overall trade-off and result assessment
+
+The design favors explicit, testable execution contracts over minimizing the
+number of source files or transformations.
 
 | Decision | Benefit | Accepted cost | Evidence that the cost is acceptable |
 |---|---|---|---|
@@ -1121,24 +1400,28 @@ number of source files or classes.
 | Secondary sort | Streaming distinct/candidate processing | Comparator and partitioner complexity | O(1) reducer application state for Task 1-1 and Task 1-2 distinct counting |
 | Exact median in memory | Exact required answer | O(k) memory and O(k log k) sort | Largest submitted global group has 878 styles |
 | One final reducer | One ordered physical CSV and one header | Serial final stage | Only 3,696 and 144 submitted output groups respectively |
-| Global Task 1-2 eligibility | Aligns submitted output with instructor reference | Adds a preliminary job and includes styles without local XXL evidence | Full 144-row result validates; local 128-row result is retained for sensitivity |
+| Global Task 1-2 eligibility | Treats large-size service as a dataset-level style property | Adds a preliminary job and includes styles without local XXL evidence | Full 144-row result validates; local 128-row result is retained for sensitivity |
+| Task 2-1 broadcast joins | Avoids shuffling the candidate side and stabilizes the physical plan | Each executor receives three small hashed relations | Relations have 185, 0, and 40 rows in the submitted run |
+| Task 2-1 city null rejection | Produces only real city groups | Three base records are excluded from output | Rejection is logged; output denominator invariant equals 6,906 |
 
-The key performance conclusion is not merely that both jobs finish in about one
-minute. The counters show why the plans are reasonable: Task 1-1 reduces 925,395
+The Task 1 counters show why the MapReduce plans are reasonable: Task 1-1 reduces 925,395
 bucket records to 27,134 combined records. Submitted global Task 1-2 filters
 1,195 ineligible source records at the mapper, combines 127,746 observations
 into 68,161 shuffle records, and sends 31,394 compact style varieties to the
-median stage.
+median stage. For Task 2-1, the physical plan keeps the large candidate branch
+stationary across three broadcast joins and limits shuffle to the four required
+aggregations.
 
 The key correctness conclusion is that every filtering, grouping, null, ordering,
 and ambiguity decision is stated as part of the query contract and is then
-represented in a concrete MapReduce mechanism. Reproducible full-output
+represented in a concrete framework mechanism. Reproducible full-output
 validation found zero mismatches for Task 1-1, submitted global Task 1-2, and
-local Task 1-2 sensitivity.
+local Task 1-2 sensitivity. Task 2-1 passed Spark read-back invariants and an
+independent Pandas schema/content check.
 
-## 7. Reproducibility and file layout
+## 8. Reproducibility and file layout
 
-### 7.1. Independent output validator
+### 8.1. Independent output validator
 
 <code>Task1Validator</code> is a sequential Scala program. It shares only the
 CSV parsing and normalization contract with the jobs; it does not instantiate
@@ -1163,7 +1446,7 @@ Observed validation result:
 The validator also confirmed 128,975 input records, zero malformed CSV records,
 109,566 valid bought records, and 1,103 globally eligible styles.
 
-### 7.2. Reproducing the benchmark
+### 8.2. Reproducing the benchmark
 
 The PowerShell runner copies the built JAR once, executes each complete Hadoop
 pipeline five times, rejects failed runs, extracts the elapsed time printed by
@@ -1178,14 +1461,15 @@ The <code>-Pipeline</code> option also accepts <code>task11</code>,
 to be resumed without rerunning completed batches. Exact samples are reported
 in Sections 4.11 and 5.10.
 
-### 7.3. Files on the normal host filesystem
+### 8.3. Files on the normal host filesystem
 
 Required submission files:
 
 ~~~text
 output/
 ├── Task_1-1.csv
-└── Task_1-2.csv
+├── Task_1-2.csv
+└── Task_2-1.parquet
 ~~~
 
 Supplementary analysis files:
@@ -1206,9 +1490,11 @@ src/
 ├── Task_1-1/source/lab3/task11/
 │   ├── Task11Types.scala
 │   └── Task11Jobs.scala
-└── Task_1-2/source/lab3/task12/
+├── Task_1-2/source/lab3/task12/
     ├── Task12Types.scala
     └── Task12Jobs.scala
+└── Task_2-1/source/lab3/task21/
+    └── Task21.scala
 scripts/
 ├── Task1Validator.scala
 └── benchmark-task1.ps1
