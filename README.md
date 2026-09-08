@@ -1,8 +1,8 @@
 # Lab 3 — MapReduce and Spark DataFrames
 
 This repository contains the complete implementation, reproducible Docker
-environment, final output files, report source, and validation evidence for all
-four Lab 3 tasks.
+environment, final output files, validation evidence, and the final Prism
+references addendum for all four Lab 3 tasks.
 
 ## Current submission status
 
@@ -12,12 +12,11 @@ four Lab 3 tasks.
 - Task 2-1 independent Pandas recomputation: zero mismatches.
 - Task 2-2 independent NumPy type-7 validation: zero mismatches across 32,972
   exact group-percentile rows.
-- Report chapters in `docs/tex_prism_chapters/` are corrected and synchronized
-  with the final benchmark evidence; their README records the Prism import order
-  and image dependencies.
-- `docs/Report.pdf` is intentionally absent until the corrected chapters are
-  exported again from Prism/Overleaf. The previous PDF is preserved in
-  `docs/archive/` and must not be submitted.
+- Corrected report chapters 00--08 have been uploaded to Prism and synchronized
+  with the final benchmark evidence. The remaining chapter 09 is staged in
+  `docs/prism_upload/`.
+- `docs/Report.pdf` is intentionally absent until the complete report is
+  exported again from Prism/Overleaf.
 - `docs/drive_link.txt` still needs the group's real shared Drive URL.
 
 ## Repository layout
@@ -43,10 +42,8 @@ Lab3/
 │   └── Task_2-2.parquet          # Required deliverable
 │
 ├── docs/                         # Report and supporting documentation
-│   ├── tex_prism_chapters/       # Authoritative corrected report source
 │   ├── evidence/                 # Benchmarks, plans, validations, hashes
-│   ├── review/                   # Teacher-style review and team checklist
-│   ├── archive/                  # Superseded draft and old PDF
+│   ├── archive/                  # Superseded Markdown draft
 │   ├── data_rules.md             # Canonical data/business contract
 │   ├── PREPARATION.md            # Environment runbook
 │   └── README.md                 # Documentation index
@@ -96,8 +93,9 @@ they do not replace the four required outputs.
 
 ## Final manual checklist
 
-1. Export the corrected report chapters to `docs/Report.pdf` and inspect every
-   table, equation, and Task 2-1 screenshot.
+1. Upload `docs/prism_upload/09_references.tex`, include it after chapter 08,
+   export the report to `docs/Report.pdf`, and inspect every table, equation,
+   reference URL, and Task 2-1 screenshot.
 2. Create `docs/drive_link.txt` containing one accessible Drive URL.
 3. Confirm the Drive folder contains the exact four filenames above.
 4. Package the required source/report structure under one representative-ID
