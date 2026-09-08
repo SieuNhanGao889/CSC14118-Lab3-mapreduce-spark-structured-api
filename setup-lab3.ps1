@@ -10,7 +10,8 @@ Set-StrictMode -Version Latest
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ComposeFile = Join-Path $ProjectRoot "docker-compose.yml"
 $DocsDirectory = Join-Path $ProjectRoot "docs"
-$LogFile = Join-Path $DocsDirectory "environment-check.txt"
+$EvidenceDirectory = Join-Path $DocsDirectory "evidence"
+$LogFile = Join-Path $EvidenceDirectory "environment-check.txt"
 
 function Write-Step {
     param([string]$Message)
@@ -68,7 +69,7 @@ if (-not (Test-Path $ComposeFile)) {
     throw "docker-compose.yml was not found beside setup-lab3.ps1."
 }
 
-foreach ($RelativeDirectory in @("data/raw", "data/test", "src", "output", "docs")) {
+foreach ($RelativeDirectory in @("data/raw", "data/test", "src", "output", "docs", "docs/evidence")) {
     New-Item -ItemType Directory -Force (Join-Path $ProjectRoot $RelativeDirectory) | Out-Null
 }
 

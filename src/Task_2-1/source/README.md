@@ -49,7 +49,7 @@ docker exec lab3-spark-master /opt/spark/bin/spark-submit `
   --class lab3.task21.Task21PlanComparison `
   /tmp/lab3.jar `
   /workspace/input/amazon_sales.csv `
-  2>&1 | Tee-Object -FilePath .\docs\Task_2-1-plan-comparison.txt
+  2>&1 | Tee-Object -FilePath .\docs\evidence\task21-plan-comparison.txt
 ```
 
 The comparison calls `explain(true)` for both plans and checks complete result
@@ -65,7 +65,7 @@ equivalence with `EXCEPT ALL` in both directions. Expected summary:
 
 The final line must be `TASK21_COMPARISON_VALIDATION=PASS`.
 
-For report screenshots, open `docs/Task_2-1-plan-comparison.txt` in VS Code:
+For report screenshots, open `docs/evidence/task21-plan-comparison.txt` in VS Code:
 
 1. Find `TASK21_COMPARISON_BROADCAST_EXTENDED_PLAN_BEGIN`, then the following
    `== Physical Plan ==`; capture the portion showing `BroadcastHashJoin` and

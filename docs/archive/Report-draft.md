@@ -1,5 +1,10 @@
 # LAB 3 REPORT — ADVANCED MAPREDUCE AND SPARK STRUCTURED APIs
 
+> **Archived draft:** the submission report is maintained in
+> `docs/tex_prism_chapters/`. Final same-machine benchmark and validation values
+> are in `docs/evidence/`; the older measurements below must not be copied back
+> into the final TeX report.
+
 ## Task 1-1, Task 1-2, Task 2-1, and Task 2-2
 
 **Course:** Introduction to Big Data Analysis  
@@ -1274,7 +1279,7 @@ AdaptiveSparkPlan
                   +- Exchange hashpartitioning(ship_state, ...)
 ~~~
 
-![Figure 6.1 — Task 2-1 physical plan using broadcast joins](2-1-broadcast-joins.png)
+![Figure 6.1 — Task 2-1 physical plan using broadcast joins](../evidence/task21-broadcast-joins.png)
 
 The complete parsed, analyzed, optimized, and physical plans are emitted between
 the stable `TASK21_EXTENDED_ANALYTICAL_PLAN_BEGIN` and `_END` log markers so the
@@ -1318,13 +1323,13 @@ sends each small derived relation to the executors while leaving the candidate
 side in place. Full `explain(true)` output for both plans is delimited by the
 `TASK21_COMPARISON_*_EXTENDED_PLAN_BEGIN/END` markers.
 
-![Figure 6.2 — Task 2-1 physical plan with broadcast disabled](2-1-broadcast-disabled.png)
+![Figure 6.2 — Task 2-1 physical plan with broadcast disabled](../evidence/task21-broadcast-disabled.png)
 
 Changing the physical strategy did not change query semantics. Bidirectional
 `EXCEPT ALL` returned zero rows both ways, and the comparison driver ended with
 `TASK21_COMPARISON_VALIDATION=PASS`.
 
-![Figure 6.3 — Physical-plan metrics and result-equivalence validation](2-1-metrics-validation.png)
+![Figure 6.3 — Physical-plan metrics and result-equivalence validation](../evidence/task21-metrics-validation.png)
 
 With AQE enabled, one worker, two executor cores, and eight configured shuffle
 partitions, `SparkStatusTracker` observed ten distinct stages (IDs 22–31) in the

@@ -1,0 +1,15 @@
+Command:
+python .\scripts\validate-final-outputs.py
+
+OUTPUT_READBACK Task_1-1.csv rows=3696 columns=5 schema=PASS
+OUTPUT_READBACK Task_1-2.csv rows=144 columns=5 schema=PASS
+OUTPUT_READBACK Task_2-1.parquet rows=1434 columns=4 schema=PASS
+OUTPUT_READBACK Task_2-2.parquet rows=65944 columns=9 schema=PASS
+OUTPUT_KEYS Task_1-1.csv duplicate_keys=0
+OUTPUT_KEYS Task_1-2.csv duplicate_keys=0
+OUTPUT_KEYS Task_2-1.parquet duplicate_keys=0
+OUTPUT_KEYS Task_2-2.parquet duplicate_keys=0
+SOURCE_READBACK rows=128975 columns=37
+TASK21_NUMPY_VALIDATION valid_promotions=185 expected_rows=1434 mismatches=0
+TASK22_NUMPY_VALIDATION exact_rows=32972 largest_group=426 groups_over_1000=0 integer_mismatches=0 threshold_mismatches=0 stddev_mismatches=0
+FINAL_OUTPUT_VALIDATION=PASS

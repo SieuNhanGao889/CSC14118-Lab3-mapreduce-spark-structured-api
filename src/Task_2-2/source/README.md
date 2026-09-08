@@ -36,8 +36,8 @@ The final line must be `TASK22_VALIDATION=PASS`.
 - 128,975 accepted observations and 16,486 SKU-month groups;
 - largest group: 426 records; groups over 1,000: zero;
 - output: 65,944 rows (`16,486 × 2 percentiles × 2 methods`);
-- approximate benchmark: `1.330443 ± 0.280872` seconds;
-- exact type-7 benchmark: `1.394585 ± 0.265700` seconds;
+- approximate benchmark: `1.614121 ± 0.394983` seconds;
+- exact type-7 benchmark: `1.641557 ± 0.446865` seconds;
 - full independent Pandas/NumPy exact comparison: 32,972 rows, zero mismatches.
 
 | Percentile | Threshold differs | Qualifying set differs | Final SD differs |

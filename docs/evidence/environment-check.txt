@@ -1,12 +1,12 @@
 ﻿**********************
 Windows PowerShell transcript start
-Start time: 20260903231742
+Start time: 20260908171110
 Username: HIEUPEP\dnthi
 RunAs User: HIEUPEP\dnthi
 Configuration Name: 
 Machine: HIEUPEP (Microsoft Windows NT 10.0.26200.0)
 Host Application: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\verify-preparation.ps1
-Process ID: 3856
+Process ID: 23820
 PSVersion: 5.1.26100.9278
 PSEdition: Desktop
 PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.9278
@@ -63,5 +63,5 @@ Spark Worker UI: http://localhost:8081
 Environment log: C:\Users\dnthi\OneDrive\Documents\BigData\Lab3\docs\environment-check.txt
 **********************
 Windows PowerShell transcript end
-End time: 20260903231804
+End time: 20260908171422
 **********************

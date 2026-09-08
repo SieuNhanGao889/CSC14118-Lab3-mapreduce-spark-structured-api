@@ -22,7 +22,7 @@ This command performs a Maven build, verifies HDFS ingestion, runs a real MapRed
 
 Generated evidence:
 
-- `docs/environment-check.txt` — service and version audit.
+- `docs/evidence/environment-check.txt` — service and version audit.
 - `output/data-profile.md` — reproducible dataset profile.
 - `output/smoke-csv/` and `output/smoke-parquet/` — temporary format round-trip evidence.
 - `/lab3/smoke/mapreduce-record-count` in HDFS — MapReduce smoke result.

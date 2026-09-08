@@ -1,0 +1,12 @@
+Command:
+docker compose --profile tools run --rm build java -cp target/lab3-1.0.0-all.jar lab3.tools.Task1Validator "data/raw/Amazon Sale Report.csv" output/Task_1-1.csv output/Task_1-2.csv output/Task_1-2-local-sensitivity.csv
+
+Task 1 independent validation
+Input data records: 128975
+Malformed CSV records: 0
+Valid bought records: 109566
+Global eligible styles: 1103
+Task 1-1: expected=3696, actual=3696, mismatches=0
+Task 1-2 global: expected=144, actual=144, mismatches=0
+Task 1-2 local: expected=128, actual=128, mismatches=0
+VALIDATION PASSED: every output key and value matches the local reference calculation.

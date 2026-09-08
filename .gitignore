@@ -2,3 +2,5 @@ target/
 output/smoke-csv/
 output/smoke-parquet/
 output/.*.crc
+__pycache__/
+*.py[cod]
